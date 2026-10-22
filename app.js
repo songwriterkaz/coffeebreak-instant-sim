@@ -6,7 +6,8 @@ var me=clean(q.get('me'))||clean(localStorage.getItem('cbi_me')),target=clean(q.
 var dev=localStorage.getItem('cbi_dev');if(!dev){dev=Math.random().toString(36).slice(2,8);localStorage.setItem('cbi_dev',dev)}
 // contacts: {k,n,sim,tel,t,del}
 var book=JSON.parse(localStorage.getItem('cbi_book')||'[]');
-var peer,conn,mcall,stream,muted=false,paused=false,wake,second=false,ICE={iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+var FALLBACK={"iceServers":[{"urls":["stun:stun.l.google.com:19302","stun:stun1.l.google.com:19302","stun:stun2.l.google.com:19302","stun:stun3.l.google.com:19302","stun:stun4.l.google.com:19302"]},{"urls":"stun:stun.cloudflare.com:3478"},{"urls":"stun:global.stun.twilio.com:3478"},{"urls":"stun:stun.nextcloud.com:443"},{"urls":"turn:global.relay.metered.ca:80","username":"fbcff5d24c6b2dc747ebf467","credential":"Q25Ljae87jPAQ0Bo"},{"urls":"turn:global.relay.metered.ca:80?transport=tcp","username":"fbcff5d24c6b2dc747ebf467","credential":"Q25Ljae87jPAQ0Bo"},{"urls":"turn:global.relay.metered.ca:443","username":"fbcff5d24c6b2dc747ebf467","credential":"Q25Ljae87jPAQ0Bo"},{"urls":"turns:global.relay.metered.ca:443?transport=tcp","username":"fbcff5d24c6b2dc747ebf467","credential":"Q25Ljae87jPAQ0Bo"}]};
+var peer,conn,mcall,stream,muted=false,paused=false,wake,second=false,ICE=FALLBACK;
 try{var ic=JSON.parse(localStorage.getItem('cbi_ice')||'null');if(ic&&ic.iceServers)ICE=ic}catch(e){}
 fetch('https://songwriterkaz.github.io/coffeebreak-ice/ice.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null}).then(function(j){if(j&&j.iceServers){ICE={iceServers:j.iceServers};localStorage.setItem('cbi_ice',JSON.stringify(ICE))}}).catch(function(){});
 function st(t,ok){$('#st').textContent=t;$('#st').className=ok?'ok':''}
@@ -38,20 +39,20 @@ waitFor('QRCode',function(){new QRCode($('#qr'),{text:BASE+'?call='+me,width:120
 waitFor('Peer',start);listen();syncListen();setTimeout(function(){lastPush='';push()},1500)}
 function waitFor(n,f){if(window[n])f();else setTimeout(function(){waitFor(n,f)},150)}
 var tries=0;
-function start(){st('Going online');if(peer)try{peer.destroy()}catch(e){}
+function start(){if(!up()&&!sigOk)st('Going online');if(peer)try{peer.destroy()}catch(e){}
 peer=new Peer(second?P+me+'-'+dev:P+me,{config:ICE,debug:0});
-peer.on('open',function(){tries=0;st(target?'Connecting to '+target:'Online. Ready',!target);link();if(target)ntfy(target);fast()});
+peer.on('open',function(){tries=0;online=true;if(!up())st(target?'Connecting to '+target:'Online. Ready',!target);step('Online');link();if(target)ntfy(target);fast()});
 peer.on('connection',function(c){bind(c)});
 peer.on('call',function(c){var n=nameOf(c.peer);save(n);if(paused||mcall){try{c.close()}catch(e){};if(conn&&conn.open)try{conn.send(paused?'paused':'busy')}catch(e){};return}
 target=n;fill();mic().then(function(s){live2(true);c.answer(s);media(c)}).catch(function(){c.answer();media(c);needTap()})});
-peer.on('disconnected',function(){st('Reconnecting');setTimeout(function(){try{peer.reconnect()}catch(e){start()}},1500)});
-peer.on('error',function(e){if(e.type=='unavailable-id'){st('Reconnecting');if(tries>=2)second=true;setTimeout(start,1000+Math.min(tries++,5)*800)}else if(e.type=='peer-unavailable'){st(target+' is offline. Waiting');ntfy(target);fast()}else if(e.type=='network'||e.type=='server-error'||e.type=='socket-error'){st('Reconnecting');setTimeout(start,1500)}})}
+peer.on('disconnected',function(){if(!up())st('Reconnecting');setTimeout(function(){try{peer.reconnect()}catch(e){start()}},1500)});
+peer.on('error',function(e){if(e.type=='unavailable-id'){step('Name in use on another screen. Using a spare line');second=true;tries++;setTimeout(start,300)}else if(e.type=='peer-unavailable'){if(!up())st('Waiting for '+target);ntfy(target);fast()}else if(e.type=='network'||e.type=='server-error'||e.type=='socket-error'){if(!up()&&!sigOk)st('Reconnecting');step('Main server slow. Using backup line');setTimeout(start,2500)}})}
 // a second phone with the same name uses its own id, and tries to take the main one back now and then
 setInterval(function(){if(second&&!mcall){second=false;tries=2;start()}},90000);
 function link(){if(!target||!peer||!peer.open)return;if(conn&&conn.open&&nameOf(conn.peer)==target)return;if(conn&&!conn.open&&nameOf(conn.peer)==target&&Date.now()-lt<1400)return;lt=Date.now();var c=peer.connect(P+target,{reliable:true});conn=conn&&conn.open?conn:c;bind(c)}
 var lt=0,ft;function fast(){clearTimeout(ft);var n=0;(function f(){if(!target||(conn&&conn.open)||n++>12)return;link();ft=setTimeout(f,1500)})()}
-function bind(c){c.on('open',function(){conn=c;var n=nameOf(c.peer);save(n);if(!target){target=n;fill()}st('Connected to '+n,true)});
-c.on('data',function(d){if(d=='bye'&&mcall){try{mcall.close()}catch(e){}endUI()}else if(d=='paused'||d=='busy'){if(mcall){try{mcall.close()}catch(e){}endUI()}st(nameOf(c.peer)+(d=='paused'?' has paused calls':' is on another call'))}});c.on('close',function(){if(conn==c){conn=null;st('Reconnecting');fast()}});c.on('error',function(){})}
+function bind(c){c.on('open',function(){conn=c;var n=nameOf(c.peer);save(n);if(!target){target=n;fill()}if(!mcall&&!rcall)st('Connected to '+n,true);step('Connected to '+n)});
+c.on('data',function(d){if(d=='bye'&&mcall){try{mcall.close()}catch(e){}endUI()}else if(d=='paused'||d=='busy'){if(mcall){try{mcall.close()}catch(e){}endUI()}st(nameOf(c.peer)+(d=='paused'?' has paused calls':' is on another call'))}});c.on('close',function(){if(conn==c){conn=null;if(!up())st('Reconnecting');fast()}});c.on('error',function(){})}
 setInterval(function(){if(peer&&peer.disconnected&&!peer.destroyed)try{peer.reconnect()}catch(e){};if(target&&!(conn&&conn.open))link()},4000);
 function ntfy(n){fetch('https://ntfy.sh/cbinst-'+n,{method:'POST',body:me}).catch(function(){})}
 function listen(){try{var es=new EventSource('https://ntfy.sh/cbinst-'+me+'/sse');es.onmessage=function(e){try{var n=clean(JSON.parse(e.data).message);if(n&&n!=me){save(n);if(!(conn&&conn.open)){target=n;fill();link()}}}catch(x){}}}catch(e){}}
@@ -62,12 +63,12 @@ function needTap(){$('#ans').hidden=false}
 function warm(){mic().catch(function(){needTap()})}
 document.addEventListener('pointerdown',function w(){document.removeEventListener('pointerdown',w,true);warm()},true);
 if(localStorage.getItem('cbi_mic'))setTimeout(warm,300);else if(navigator.permissions&&navigator.permissions.query)navigator.permissions.query({name:'microphone'}).then(function(p){if(p.state=='granted')warm();else needTap()}).catch(needTap);else needTap();
-function media(c){mcall=c;live2(true);st('On call with '+nameOf(c.peer),true);c.on('stream',function(s){var a=$('#au');a.srcObject=s;a.play().catch(function(){});st('On call with '+nameOf(c.peer),true)});
+function media(c){mcall=c;live2(true);$('#au').muted=paused;st('On call with '+nameOf(c.peer),true);c.on('stream',function(s){var a=$('#au');a.srcObject=s;a.play().catch(function(){});st('On call with '+nameOf(c.peer),true)});
 c.on('close',endUI);c.on('error',endUI);$('#call').textContent='END';$('#call').classList.add('end');$('#call').classList.remove('hide');}
 function endUI(){if(!mcall&&$('#call').textContent=='CALL')return;mcall=null;live2(false);ring(false);$('#call').textContent='CALL';$('#call').classList.remove('end','hide');st(conn&&conn.open?'Connected to '+target:'Online. Ready',true)}
 function callTo(sim){if(mcall)return;target=sim;fill();link();$('#call').click();window.scrollTo(0,0)}
-$('#call').onclick=function(){if(mcall){try{conn&&conn.open&&conn.send('bye')}catch(e){}mcall.close();endUI();return}target=target||$('#who').value;if(!target){st('Share your link first');return}
-if(!peer||!peer.open){st('Still going online');return}if(paused){st('Turn off Pause to call');return}st('Calling '+target);mic().then(function(s){live2(true);media(peer.call(P+target,s))}).catch(function(){st('Allow the microphone')})};
+$('#call').onclick=function(){if(rcall){rawEnd(true);return}if(mcall){try{conn&&conn.open&&conn.send('bye')}catch(e){}mcall.close();endUI();return}target=target||$('#who').value;if(!target){st('Share your link first');return}
+if(paused){st('Turn off Pause to call');return}if(!(conn&&conn.open)&&rw&&rw.open){rawCall();return}if(!peer||!peer.open){st('Still going online');return}if(paused){st('Turn off Pause to call');return}st('Calling '+target);mic().then(function(s){live2(true);media(peer.call(P+target,s))}).catch(function(){st('Allow the microphone')})};
 $('#ans').onclick=function(){mic().then(function(s){if(mcall){mcall.peerConnection&&mcall.peerConnection.getSenders().forEach(function(x){if(x.track==null||x.track.kind=='audio')x.replaceTrack(s.getAudioTracks()[0]).catch(function(){})})}st('Phone is on',true)}).catch(function(){st('Allow the microphone')})};
 $('#mute').onclick=function(){muted=!muted;if(stream)stream.getAudioTracks().forEach(function(t){t.enabled=!muted&&!paused});live2(!!mcall);this.classList.toggle('on',muted);this.textContent=muted?'Unmute':'Mute'};
 $('#pause').onclick=function(){paused=!paused;live2(!!mcall);$('#au').muted=paused;st(paused?'Paused. Calls are blocked':(conn&&conn.open?'Connected to '+target:'Online. Ready'),!paused);this.classList.toggle('on',paused);this.textContent=paused?'Resume':'Pause'};
@@ -138,3 +139,44 @@ $('#bSend').onclick=function(){show('pSend')};
 $('#sendlink').onclick=function(){var L=live().map(function(c){return {n:c.n,sim:c.sim,tel:c.tel}});var u=BASE+'#c='+btoa(unescape(encodeURIComponent(JSON.stringify(L))));shareIt({title:'My Coffeebreak contacts',url:u},u)};
 $('#sendfile').onclick=function(){var f=vcfFile();if(navigator.canShare&&navigator.canShare({files:[f]}))navigator.share({files:[f],title:'My contacts'}).catch(function(){});else download(f)};
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
+
+// ---- backup line: direct WebRTC with ntfy.sh signalling (offer/answer/ICE), runs if no link after 3 s ----
+var sigOk=false,online=false,rw=null,rcall=false,t0=Date.now(),SIG='https://ntfy.sh/cbinst-sig-';
+function up(){return (conn&&conn.open)||(rw&&rw.open)}
+function step(t){var s=$('#steps');if(s)s.textContent=t}
+function sig(to,m){m.f=me;m.dv=dev;fetch(SIG+to,{method:'POST',body:JSON.stringify(m)}).catch(function(){})}
+function iceCfg(relay){var c={iceServers:(ICE&&ICE.iceServers)||FALLBACK.iceServers};if(relay){c.iceServers=c.iceServers.filter(function(s){return /turns?:/.test([].concat(s.urls).join(' '))});if(!c.iceServers.length)c.iceServers=FALLBACK.iceServers.filter(function(s){return /turns?:/.test([].concat(s.urls).join(' '))});c.iceTransportPolicy='relay'}return c}
+function rawNew(who,sid,relay){if(rw)try{rw.pc.close()}catch(e){}
+var pc=new RTCPeerConnection(iceCfg(relay)),r={pc:pc,who:who,sid:sid,open:false,relay:relay,dc:null,q:[]};rw=r;
+var tr=pc.addTransceiver('audio',{direction:'sendrecv'});if(stream)tr.sender.replaceTrack(stream.getAudioTracks()[0]).catch(function(){});r.tr=tr;
+pc.ontrack=function(e){var a=$('#au');if(!(a.srcObject&&a.srcObject.active&&mcall))a.srcObject=e.streams[0]||new MediaStream([e.track]);if(!rcall)a.muted=true};
+pc.onicecandidate=function(e){if(e.candidate)sig(who,{k:'ice',s:sid,d:e.candidate})};
+pc.onconnectionstatechange=function(){if(rw!=r)return;if(pc.connectionState=='failed'||pc.connectionState=='closed'){r.open=false;if(rcall)rawEnd(false);if(!up()){st('Reconnecting');setTimeout(function(){rawGo(true)},1000)}}};
+return r}
+function rawDc(r,dc){r.dc=dc;dc.onopen=function(){if(rw!=r)return;r.open=true;save(r.who);if(!target){target=r.who;fill()}if(stream)r.tr.sender.replaceTrack(stream.getAudioTracks()[0]).catch(function(){});if(!(conn&&conn.open)&&!mcall&&!rcall)st('Connected to '+r.who,true);step('Connected to '+r.who+(r.relay?' by relay':' by backup line'))};
+dc.onclose=function(){if(rw==r){r.open=false;if(rcall)rawEnd(false);if(!up())st('Reconnecting')}};
+dc.onmessage=function(e){rawMsg(e.data)}}
+function rawGo(relay){if(!target||up()&&!relay)return;if(rw&&rw.open)return;var sid=Math.random().toString(36).slice(2,9),r=rawNew(target,sid,relay);
+rawDc(r,r.pc.createDataChannel('cb'));step(relay?'Trying relay line':'Trying backup line');
+r.pc.createOffer().then(function(o){return r.pc.setLocalDescription(o)}).then(function(){sig(target,{k:'offer',s:sid,d:r.pc.localDescription,rl:!!relay})}).catch(function(){})}
+function rawSig(m){if(!m||!m.f||m.f==me&&m.dv==dev)return;var f=clean(m.f);
+if(m.k=='offer'){if(rw&&rw.who==f&&rw.open)return;if(rw&&rw.who==f&&rw.pc.signalingState=='have-local-offer'&&me<f)return;
+var r=rawNew(f,m.s,m.rl);r.pc.ondatachannel=function(e){rawDc(r,e.channel)};
+r.pc.setRemoteDescription(m.d).then(function(){(r.q||[]).forEach(function(c){r.pc.addIceCandidate(c).catch(function(){})});return r.pc.createAnswer()}).then(function(a){return r.pc.setLocalDescription(a)}).then(function(){sig(f,{k:'answer',s:m.s,d:r.pc.localDescription})}).catch(function(){})}
+else if(rw&&rw.sid==m.s){if(m.k=='answer'&&rw.pc.signalingState=='have-local-offer')rw.pc.setRemoteDescription(m.d).then(function(){rw.q.forEach(function(c){rw.pc.addIceCandidate(c).catch(function(){})})}).catch(function(){});
+else if(m.k=='ice'){if(rw.pc.remoteDescription)rw.pc.addIceCandidate(m.d).catch(function(){});else rw.q.push(m.d)}}}
+function rawListen(){try{var es=new EventSource(SIG+me+'/sse');es.onopen=function(){sigOk=true;if(!online&&!up()){st(target?'Connecting to '+target:'Online. Ready',!target);step('Online by backup line')}};es.onmessage=function(e){try{rawSig(JSON.parse(JSON.parse(e.data).message))}catch(x){}}}catch(e){}}
+function rsend(m){try{rw&&rw.dc&&rw.dc.readyState=='open'&&rw.dc.send(m)}catch(e){}}
+function rawOn(){if(!rw)return;rcall=true;var a=$('#au');a.muted=paused;a.play().catch(function(){});live2(true);$('#call').textContent='END';$('#call').classList.add('end');st('On call with '+rw.who,true)}
+function rawCall(){mic().then(function(s){rw.tr.sender.replaceTrack(s.getAudioTracks()[0]).catch(function(){});rsend('call');rawOn()}).catch(function(){st('Allow the microphone')})}
+function rawEnd(tell){if(tell)rsend('bye');rcall=false;live2(false);$('#au').muted=true;$('#call').textContent='CALL';$('#call').classList.remove('end');if(rw&&rw.open)st('Connected to '+rw.who,true);else if(!up())st('Reconnecting')}
+function rawMsg(d){if(d=='call'){if(paused||mcall){rsend(paused?'paused':'busy');return}target=rw.who;fill();mic().then(function(s){rw.tr.sender.replaceTrack(s.getAudioTracks()[0]).catch(function(){});rawOn()}).catch(function(){rawOn();needTap()})}
+else if(d=='bye'){if(rcall||!mcall&&$('#call').textContent=='END')rawEnd(false)}else if(d=='paused'||d=='busy'){if(rcall)rawEnd(false);st(rw.who+(d=='paused'?' has paused calls':' is on another call'))}}
+var _mic=mic;mic=function(){return _mic().then(function(s){if(rw&&rw.tr)rw.tr.sender.replaceTrack(s.getAudioTracks()[0]).catch(function(){});return s})};
+function watch(){t0=Date.now();clearTimeout(watch.a);clearTimeout(watch.b);clearTimeout(watch.c);$('#retry').classList.add('hide');
+watch.a=setTimeout(function(){if(target&&!up())rawGo(false)},3000);
+watch.b=setTimeout(function(){if(target&&!up()){step('Trying relay line');if(peer&&peer.options){peer.options.config=iceCfg(true);conn=null;lt=0;link()}rawGo(true)}},6000);
+watch.c=setTimeout(function(){if(target&&!up()){$('#retry').classList.remove('hide');st('Not connected yet');step('Check both phones have the app open, then tap Try again')}},15000)}
+$('#retry').onclick=function(){$('#retry').classList.add('hide');st('Trying again');step('Starting');ICE={iceServers:(ICE.iceServers||FALLBACK.iceServers)};second=false;tries=0;if(rw)try{rw.pc.close()}catch(e){};rw=null;conn=null;waitFor('Peer',start);watch()};
+if(me){rawListen();watch()}else{var _go=go;go=function(){_go();rawListen();watch()}}
+setInterval(function(){if(target&&!up()&&Date.now()-t0>15000)rawGo(true)},20000);
